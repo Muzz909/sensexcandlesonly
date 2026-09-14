@@ -132,6 +132,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 if "auto_refresh"    not in st.session_state: st.session_state.auto_refresh = True
 if "last_refresh"    not in st.session_state: st.session_state.last_refresh = None
 if "data_cache"      not in st.session_state: st.session_state.data_cache = {}
+if "fetch_errors"    not in st.session_state: st.session_state.fetch_errors = {}
 if "active_tf_tab"   not in st.session_state: st.session_state.active_tf_tab = "1m"
 
 # ── Build candle chart ────────────────────────────────────────────────────────
@@ -323,14 +324,18 @@ Switch between <b>1m / 3m / 5m / 15m</b> tabs to zoom into each timeframe's cand
 def do_refresh():
     with st.spinner("Fetching latest candle data…"):
         data = {}
+        errors = {}
         for tf in TIMEFRAMES:
-            df = fetch_sensex_data(tf["interval"], tf["period"])
+            df, err = fetch_sensex_data(tf["interval"], tf["period"])
             if df is not None and not df.empty:
                 data[tf["label"]] = {
                     "df": df,
                     "result": detect_patterns(df, tf["label"]),
                 }
+            else:
+                errors[tf["label"]] = err or "Unknown error"
         st.session_state.data_cache   = data
+        st.session_state.fetch_errors = errors
         st.session_state.last_refresh = now_ist_str()
 
 # ── App layout ────────────────────────────────────────────────────────────────
@@ -404,7 +409,8 @@ def main():
         lbl = tf["label"]
         with tab:
             if lbl not in data:
-                st.info(f"No data for {lbl}")
+                reason = st.session_state.fetch_errors.get(lbl)
+                st.info(f"No data for {lbl}" + (f" — {reason}" if reason else ""))
                 continue
             df     = data[lbl]["df"]
             result = data[lbl]["result"]
