@@ -317,7 +317,7 @@ def render_instructions():
 <b>Wick length:</b> Long upper wick = rejection at high (bearish). Long lower wick = rejection at low (bullish).<br>
 <b>Candle body size:</b> Large body = strong momentum. Small body = indecision.<br><br>
 <h4>⏱️ Timeframe Tabs</h4>
-Switch between <b>1m / 3m / 5m / 15m</b> tabs to zoom into each timeframe's candle view. Each tab auto-fits the last N candles for that timeframe so you see the clearest picture.
+Switch between <b>1m / 2m / 5m / 15m</b> tabs to zoom into each timeframe's candle view. Each tab auto-fits the last N candles for that timeframe so you see the clearest picture.
 </div>""", unsafe_allow_html=True)
 
 # ── Main refresh logic ────────────────────────────────────────────────────────
@@ -326,12 +326,26 @@ def do_refresh():
         data = {}
         errors = {}
         for tf in TIMEFRAMES:
-            df, err = fetch_sensex_data(tf["interval"], tf["period"])
-            if df is not None and not df.empty:
-                data[tf["label"]] = {
-                    "df": df,
-                    "result": detect_patterns(df, tf["label"]),
-                }
+            try:
+                result = fetch_sensex_data(tf["interval"], tf["period"])
+                # fetch_sensex_data returns (df, error) — but guard against a
+                # stale/mismatched candle_engine.py that still returns a bare
+                # value, so a deploy skew never crashes the whole app.
+                if isinstance(result, tuple) and len(result) == 2:
+                    df, err = result
+                else:
+                    df, err = result, None
+            except Exception as e:
+                df, err = None, f"{type(e).__name__}: {e}"
+
+            if df is not None and not getattr(df, "empty", True):
+                try:
+                    data[tf["label"]] = {
+                        "df": df,
+                        "result": detect_patterns(df, tf["label"]),
+                    }
+                except Exception as e:
+                    errors[tf["label"]] = f"Pattern detection failed: {type(e).__name__}: {e}"
             else:
                 errors[tf["label"]] = err or "Unknown error"
         st.session_state.data_cache   = data
