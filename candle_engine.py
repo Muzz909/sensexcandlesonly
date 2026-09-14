@@ -2,7 +2,12 @@
 candle_engine.py
 ────────────────
 Fetches BSE SENSEX data via yfinance and detects candlestick patterns
-for four timeframes: 1m, 3m, 5m, 15m.
+for four timeframes: 1m, 2m, 5m, 15m.
+
+Note on intervals: Yahoo Finance (and therefore yfinance) only supports a
+fixed set of intraday intervals — 1m, 2m, 5m, 15m, 30m, 60m/90m. "3m" is
+NOT a valid interval and will fail silently or raise, which is why it was
+replaced with "2m" here.
 """
 
 import pandas as pd
@@ -17,23 +22,39 @@ IST = pytz.timezone("Asia/Kolkata")
 # zoom_candles = how many candles to show in the zoomed tab view
 TIMEFRAMES = [
     {"label": "1m",  "interval": "1m",  "period": "1d",  "zoom_candles": 30},
-    {"label": "3m",  "interval": "3m",  "period": "5d",  "zoom_candles": 25},
+    {"label": "2m",  "interval": "2m",  "period": "5d",  "zoom_candles": 25},
     {"label": "5m",  "interval": "5m",  "period": "5d",  "zoom_candles": 24},
     {"label": "15m", "interval": "15m", "period": "5d",  "zoom_candles": 20},
 ]
 
 SENSEX_TICKER = "^BSESN"   # Yahoo Finance symbol for BSE Sensex
 
+# Intervals Yahoo Finance actually supports for intraday data.
+VALID_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
-def fetch_sensex_data(interval: str, period: str) -> pd.DataFrame | None:
-    """Download OHLCV data; return None on failure."""
+def fetch_sensex_data(interval: str, period: str) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Download OHLCV data.
+    Returns (dataframe, error_message) — dataframe is None on failure and
+    error_message explains why (invalid interval, no data returned, market
+    closed with nothing cached, network/API error, etc).
+    """
+    if interval not in VALID_INTERVALS:
+        msg = f"'{interval}' is not a Yahoo Finance interval (valid: {sorted(VALID_INTERVALS)})"
+        print(f"[fetch_sensex_data] {msg}")
+        return None, msg
+
     try:
         ticker = yf.Ticker(SENSEX_TICKER)
         df = ticker.history(interval=interval, period=period)
 
         if df is None or df.empty:
-            return None
+            msg = ("No candles returned by Yahoo Finance for this interval/period. "
+                   "Common causes: market is closed and nothing recent is cached, "
+                   "or Yahoo doesn't carry this granularity for ^BSESN right now.")
+            return None, msg
 
         df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
         df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
@@ -47,10 +68,14 @@ def fetch_sensex_data(interval: str, period: str) -> pd.DataFrame | None:
         # Filter to market hours 9:15–15:30
         df = df.between_time("09:15", "15:30")
 
-        return df
+        if df.empty:
+            msg = "Data was returned but nothing fell within 9:15–15:30 IST after timezone conversion."
+            return None, msg
+
+        return df, None
     except Exception as e:
         print(f"[fetch_sensex_data] Error for {interval}: {e}")
-        return None
+        return None, str(e)
 
 
 # ── Pattern helpers ───────────────────────────────────────────────────────────
@@ -305,9 +330,9 @@ def detect_patterns(df: pd.DataFrame, tf_label: str) -> dict:
 def get_overall_verdict(tf_results: dict) -> dict:
     """
     Aggregate signals from all timeframes into one verdict.
-    Weights: 15m > 5m > 3m > 1m
+    Weights: 15m > 5m > 2m > 1m
     """
-    weights = {"1m": 1, "3m": 2, "5m": 3, "15m": 4}
+    weights = {"1m": 1, "2m": 2, "5m": 3, "15m": 4}
     bull_score = 0
     bear_score = 0
     bull_count = 0
